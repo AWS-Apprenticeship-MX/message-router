@@ -12,6 +12,6 @@ phases:
   build:
     commands:
       - sam package --s3-bucket sam-sqs-artifacts --output-template-file packaged.yaml
-artifacts:
-  files:
-    - packaged.yaml
+  post_build:
+    commands:
+      - sam deploy --template-file packaged.yaml --stack-name NombreDeTuStack --capabilities CAPABILITY_IAM
