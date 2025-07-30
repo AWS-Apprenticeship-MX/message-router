@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: SAM app with API Gateway -> Lambda -> SQS
+Description: SAM app with API Gateway -> Lambda -> SQS -> Lambda -> EventBridge -> SNS -> Lambda (DynamoDB)
 
 Globals:
   Function:
@@ -9,15 +9,17 @@ Globals:
 
 Resources:
 
+  # --- Cola SQS ---
   MessageQueue:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: MyMessageQueue
 
+  # --- API Lambda que envía a SQS ---
   ApiFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: hello_world/
+      CodeUri: hello_world/ #  AQUI VAS A PONER EL NOMBRE DE LA CARPETA QUE MANEJA EL LAMBDA
       Handler: app.lambda_handler
       Environment:
         Variables:
@@ -31,6 +33,96 @@ Resources:
           Properties:
             Path: /send
             Method: post
+
+  # --- Lambda que consume SQS y publica en EventBridge ---
+  QueueProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: queue_processor/ # La carpeta en la que mandamos a llamar el lambda
+      Handler: app.lambda_handler
+      Policies:
+        - SQSPollerPolicy:
+            QueueName: !GetAtt MessageQueue.QueueName
+        - Statement:
+            Effect: Allow
+            Action:
+              - events:PutEvents
+            Resource: "*"
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt MessageQueue.Arn
+            BatchSize: 10
+
+  # --- EventBridge Bus ---
+  MyEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: MyCustomBus
+
+  # --- SNS Topic ---
+  MySNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: MyTargetTopic
+
+  # --- Suscripción SNS a Lambda que guarda en DynamoDB ---
+  DynamoLambdaSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: lambda
+      Endpoint: !GetAtt DynamoLambda.Arn
+      TopicArn: !Ref MySNSTopic
+
+  PermissionForSNSInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DynamoLambda
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref MySNSTopic
+
+  # --- DynamoDB Table ---
+  MessagesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: MessagesTable
+      AttributeDefinitions:
+        - AttributeName: MessageId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: MessageId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # --- Lambda que inserta en DynamoDB ---
+  DynamoLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: lambda_dynamo/
+      Handler: app.lambda_handler
+      Runtime: python3.12
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref MessagesTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MessagesTable
+
+  # --- Regla EventBridge -> SNS ---
+  EventRuleToSNS:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: !Ref MyEventBus
+      EventPattern:
+        source:
+          - "my.sqs.processor"
+        detail-type:
+          - "SQSMessage"
+      Targets:
+        - Arn: !Ref MySNSTopic
+          Id: "SendToSNSTarget"
 
 Outputs:
   ApiUrl:

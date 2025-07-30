@@ -16,9 +16,11 @@ lint = true
 capabilities = "CAPABILITY_IAM"
 confirm_changeset = true
 resolve_s3 = true
-s3_prefix = "router"
+s3_prefix = "router-dev"
 region = "us-east-1"
 image_repositories = []
+stack_name = "router-dev"
+disable_rollback = true
 
 [default.package.parameters]
 resolve_s3 = true
